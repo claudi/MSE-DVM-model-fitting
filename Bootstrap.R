@@ -29,3 +29,10 @@ Bootstrap <- function(model, data, n, B) {
     print("Mean Error")
     print(total_MSE)
 }
+
+Bootstrap(full_model, train, 100, 25)
+Bootstrap(full_model, train, 100, 50)
+Bootstrap(full_model, train, 100, 100)
+Bootstrap(select_model, train, 50, 25)
+Bootstrap(select_model, train, 50, 50)
+Bootstrap(select_model, train, 50, 100)
