@@ -1,0 +1,189 @@
+---
+title: "Predicting Boston's Median House Value"
+author: "Claudi Lleyda Moltó"
+date: "19/11/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, comment=""}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+library(caret)
+library(ISLR)
+library(arm)
+
+rss <- function(fitted, actual) {
+    sum((fitted - actual)^2)
+}
+
+rmse <- function(fitted, actual) {
+    sqrt(mean((fitted - actual)^2))
+}
+
+tss <- function(actual) {
+    sum((actual - mean(actual))^2)
+}
+
+R2 <- function(fitted, actual){
+    tss <- tss(actual)
+    rss <- rss(fitted, actual)
+    1 - rss/tss
+}
+```
+
+We want to build a model to predict the median house value in Boston's data houses. For this we will use different linear models.
+
+To choose between the different linear models we will use $K$-fold to evaluate the performance of the models in the test data.
+
+```{r}
+Kfold <- function(model, data, k)
+{
+    total_MSE <- 0
+    total_RSS <- 0
+    total_R2 <- 0
+    indexs <- cut(1:nrow(data), k, labels=FALSE)
+    indexs <- sample(indexs, length(indexs), replace=F)
+    for(i in 1:k)
+    {
+        new_model <- update(model, .~. , data=data[indexs!=i,])
+        pred <- predict(new_model, newdata=data[indexs==i,])
+        MSE <- rmse(pred, data[indexs==i,]$medv)
+        RSS <- rss(pred, data[indexs==i,]$medv)
+        R2 <- R2(pred, data[indexs==i,]$medv)
+        total_MSE <- total_MSE + MSE
+        total_R2 <- total_R2 + R2
+        total_RSS <- total_RSS + RSS
+    }
+    total_MSE <- total_MSE/k
+    total_R2 <- total_R2/k
+    total_RSS <- total_RSS/k
+    print(paste(paste("K-fold (k=", k, sep=""), "):", sep=""))
+    print(paste("    MSE:", total_MSE, sep=""))
+    print(paste("    RSS:", total_RSS, sep=""))
+    print(paste("    R2:", total_R2, sep=""))
+}
+```
+
+We split the data between $70\%$ of train and $30\%$ of test.
+
+```{r}
+set.seed(1462908)
+
+data("Boston", package="MASS")
+
+Boston_complete <- Boston[complete.cases(Boston), ]
+
+rows <- sample(nrow(Boston_complete), .7 * nrow(Boston_complete))
+train <- Boston_complete[rows, ]
+test <- Boston_complete[-rows, ]
+```
+
+To study some options we do step-wise in backward, forward and both directions.
+
+```{r}
+display(step(lm(medv ~ ., data=train), trace=F, direction="forward"))
+display(step(lm(medv ~ ., data=train), trace=F, direction="backward"))
+display(step(lm(medv ~ ., data=train), trace=F, direction="both"))
+```
+
+We see that all the models with the `step()` function get the same $R$-squared. So to compare it we use, the $K$-fold method to see which will predict better.
+
+```{r}
+lm_forward <- lm(medv ~ crim + zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + black + lstat, data=train)
+lm_both <- lm(medv ~ crim + zn + chas + nox + rm + dis + rad +  tax + ptratio + black + lstat, data=train)
+lm_backward <- lm(medv ~ crim + zn + chas + nox + rm + dis + rad + tax + ptratio + black + lstat, data=train)
+
+Kfold(lm_forward, train, 5)
+Kfold(lm_forward, train, 10)
+Kfold(lm_backward, train, 5)
+Kfold(lm_backward, train, 10)
+Kfold(lm_both, train, 5)
+Kfold(lm_both, train, 10)
+```
+
+And we see that the better option is in both directions.
+
+Then we use the `regsubsets()` function to have some different linear regression models.
+
+```{r}
+plot(regsubsets(medv ~ ., data=train, method="exhaustive", nbest=1))
+```
+
+We chose the first two models, which have the highest score with the least number of variables.
+
+```{r}
+lm_reg1 <- lm(medv ~ chas + nox + rm + dis + ptratio + black + lstat, data=train)
+lm_reg2 <- lm(medv ~ chas + nox + rm + dis + rad + ptratio + black + lstat, data=train)
+
+```
+
+And also compare them with $K$-fold.
+
+```{r}
+Kfold(lm_reg1, train, 5)
+Kfold(lm_reg1, train, 10)
+Kfold(lm_reg2, train, 5)
+Kfold(lm_reg2, train, 10)
+```
+
+We choose the first one, because has a bigger $R$-squared value.
+
+Then we will apply regularization with `glmnet()`. We will compare a combination of Ridge and Lasso in optimal proportions and Lasso Regression.
+
+```{r}
+glmnet_model <- train(medv ~ ., 
+                      data=train,
+                      preProcess=c("center", "scale"),
+                      method="glmnet")
+lasso_model <- train(medv ~ ., 
+                     data=train,
+                     preProcess=c("center", "scale"),
+                     method="glmnet",
+                     tuneGrid=expand.grid(
+                                            alpha=1,
+                                            lambda=seq(0.01,0.1, 0.01)))
+```
+
+Then we will evaluate all the models in the complete train data.
+
+```{r}
+evaluate_model <- function(model, data)
+{
+    rmse <- rmse(predict(model, newdata=data), data$medv)
+    rss <- rss(predict(model, newdata=data), data$medv)
+    R2<- R2(predict(model, newdata=data), data$medv)
+    print(paste("RMSE: ", rmse, sep=""))
+    print(paste("RSS: ", rss, sep=""))
+    print(paste("R2: ", R2, sep=""))
+}
+
+print("Evaluating the training models...")
+print("Linear regression with stepwise both:")
+evaluate_model(lm_both, train)
+print("Linear regression with chas, nox, rm, dis, ptrratio, black and lstat:")
+evaluate_model(lm_reg1, train)
+print("Combination of ridge and lasso in optimal proportions:")
+evaluate_model(glmnet_model, train)
+print("Lasso Regularization:")
+evaluate_model(lasso_model, train)
+```
+
+And finally we compare the results with the test data.
+
+```{r}
+print("Evaluating the testing models...")
+print("Linear regression with stepwise both:")
+evaluate_model(lm_both, test)
+print("Linear regression with chas, nox, rm, dis, ptrratio, black and lstat:")
+evaluate_model(lm_reg1, test)
+print("Combination of ridge and lasso in optimal proportions:")
+evaluate_model(glmnet_model, test)
+print("Lasso Regularization:")
+evaluate_model(lasso_model, test)
+```
+
+We can see, that the best model seems to be the linear regression with step-wise in both directions. But, we see that the $R$-squared in the test data is so much low than in the train data. 
